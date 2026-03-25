@@ -180,7 +180,7 @@ export async function createRouter(
       const credentials = await httpAuth.credentials(req, {
         allow: ['service', 'user'],
       });
-      const providerId = req.query.provider as string;
+      const providerParam = req.query.provider as string;
       const pluginId = req.query.plugin as string;
 
       // For user credentials, use the authenticated user; for service, require explicit user param
@@ -196,25 +196,52 @@ export async function createRouter(
         }
       }
 
-      if (!providerId || !pluginId) {
+      if (!providerParam || !pluginId) {
         throw new InputError('Missing provider or plugin query parameter');
       }
 
-      const result = await pts.getProviderToken({
+      const providerIds = providerParam
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean);
+      const tokens = await pts.getProviderTokens({
         userEntityRef,
-        providerId,
+        providerIds,
         pluginId,
       });
 
-      if (!result) {
+      if (Object.keys(tokens).length === 0) {
+        const missingProviders: Record<string, { connectUrl: string }> = {};
+        for (const id of providerIds) {
+          missingProviders[id] = {
+            connectUrl: `/api/auth/v1/provider-token/connect?provider=${encodeURIComponent(
+              id,
+            )}&plugin=${encodeURIComponent(pluginId)}`,
+          };
+        }
         res.status(404).json({
-          error: 'No token or consent not granted',
-          consentRequired: true,
+          error: 'No token found for one or more providers',
+          missingProviders,
         });
         return;
       }
 
-      res.json({ accessToken: result.accessToken, scopes: result.scopes });
+      // Check if some providers are missing
+      const missingIds = providerIds.filter(id => !tokens[id]);
+      const response: Record<string, unknown> = { tokens };
+      if (missingIds.length > 0) {
+        const missingProviders: Record<string, { connectUrl: string }> = {};
+        for (const id of missingIds) {
+          missingProviders[id] = {
+            connectUrl: `/api/auth/v1/provider-token/connect?provider=${encodeURIComponent(
+              id,
+            )}&plugin=${encodeURIComponent(pluginId)}`,
+          };
+        }
+        response.missingProviders = missingProviders;
+      }
+
+      res.json(response);
     });
 
     // Grant consent (user-facing)

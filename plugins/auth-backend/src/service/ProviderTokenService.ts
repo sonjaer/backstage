@@ -117,6 +117,33 @@ export class ProviderTokenService {
     return this.#db.listGrants(userEntityRef);
   }
 
+  async getProviderTokens(options: {
+    userEntityRef: string;
+    providerIds: string[];
+    pluginId: string;
+  }): Promise<
+    Record<
+      string,
+      { accessToken: string; refreshToken?: string; scopes?: string }
+    >
+  > {
+    const result: Record<
+      string,
+      { accessToken: string; refreshToken?: string; scopes?: string }
+    > = {};
+    for (const providerId of options.providerIds) {
+      const token = await this.getProviderToken({
+        userEntityRef: options.userEntityRef,
+        providerId,
+        pluginId: options.pluginId,
+      });
+      if (token) {
+        result[providerId] = token;
+      }
+    }
+    return result;
+  }
+
   async listProviders(userEntityRef: string) {
     return this.#db.listProviders(userEntityRef);
   }

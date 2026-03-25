@@ -107,6 +107,58 @@ describe('ProviderTokenService', () => {
     });
   });
 
+  it('should return tokens for multiple providers via getProviderTokens', async () => {
+    const { service } = await setup();
+
+    await service.storeProviderToken({
+      userEntityRef: 'user:default/alice',
+      providerId: 'github',
+      accessToken: 'gho_github_token',
+      scopes: 'repo',
+    });
+    await service.storeProviderToken({
+      userEntityRef: 'user:default/alice',
+      providerId: 'google',
+      accessToken: 'google_token',
+      scopes: 'email',
+    });
+
+    await service.grantAccess({
+      userEntityRef: 'user:default/alice',
+      pluginId: 'scaffolder',
+      providerId: 'github',
+    });
+    // No grant for google
+
+    const result = await service.getProviderTokens({
+      userEntityRef: 'user:default/alice',
+      providerIds: ['github', 'google'],
+      pluginId: 'scaffolder',
+    });
+
+    expect(result).toHaveProperty('github');
+    expect(result.github.accessToken).toBe('gho_github_token');
+    expect(result).not.toHaveProperty('google');
+  });
+
+  it('should return empty object from getProviderTokens when no grants exist', async () => {
+    const { service } = await setup();
+
+    await service.storeProviderToken({
+      userEntityRef: 'user:default/alice',
+      providerId: 'github',
+      accessToken: 'gho_token',
+    });
+
+    const result = await service.getProviderTokens({
+      userEntityRef: 'user:default/alice',
+      providerIds: ['github', 'google'],
+      pluginId: 'scaffolder',
+    });
+
+    expect(result).toEqual({});
+  });
+
   it('should delete token and associated data', async () => {
     const { service } = await setup();
 
