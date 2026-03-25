@@ -184,6 +184,8 @@ export async function createRouter(
         providerId: string;
         pluginId: string;
         codeVerifier: string;
+        clientId: string;
+        tokenUrl: string;
         redirectUrl?: string;
         expiresAt: number;
       }
@@ -310,6 +312,44 @@ export async function createRouter(
       res.json({ grants });
     });
 
+    // Cache for DCR-registered client IDs (provider → clientId)
+    const dcrClients = new Map<string, string>();
+
+    // Register a client dynamically via OpenID Connect DCR
+    const ensureDcrClient = async (
+      dcrUrl: string,
+      callbackUrl: string,
+      providerKey: string,
+    ): Promise<string> => {
+      const cached = dcrClients.get(providerKey);
+      if (cached) return cached;
+
+      const res = await fetch(dcrUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_name: `Backstage Provider Token (${providerKey})`,
+          redirect_uris: [callbackUrl],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          application_type: 'native',
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`DCR registration failed (${res.status}): ${body}`);
+      }
+
+      const data = (await res.json()) as { client_id: string };
+      dcrClients.set(providerKey, data.client_id);
+      logger.info(
+        `Registered OAuth client via DCR for ${providerKey}: ${data.client_id}`,
+      );
+      return data.client_id;
+    };
+
     // Connect endpoint – user opens this to authorize a provider
     providerTokenRouter.get('/v1/provider-token/connect', async (req, res) => {
       const credentials = await httpAuth.credentials(req, {
@@ -340,9 +380,23 @@ export async function createRouter(
 
       // External provider – handle OAuth ourselves
       const authorizeUrl = providerConfig.getString('authorizeUrl');
-      const clientId = providerConfig.getString('clientId');
+      const tokenUrl = providerConfig.getString('tokenUrl');
       const scopes = providerConfig.getOptionalStringArray('scopes') ?? [];
       const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
+
+      // Get client ID – either static from config or via DCR
+      let clientId = providerConfig.getOptionalString('clientId');
+      const dcrUrl = providerConfig.getOptionalString('dcrUrl');
+
+      if (!clientId && dcrUrl) {
+        clientId = await ensureDcrClient(dcrUrl, callbackUrl, providerId);
+      }
+
+      if (!clientId) {
+        throw new InputError(
+          `Provider ${providerId} requires either clientId or dcrUrl in config`,
+        );
+      }
 
       // Generate state
       const state = crypto.randomBytes(32).toString('hex');
@@ -352,13 +406,15 @@ export async function createRouter(
         .update(codeVerifier)
         .digest('base64url');
 
-      // Store state for callback verification (in-memory for PoC)
+      // Store state for callback verification
       connectStates.set(state, {
         userEntityRef,
         providerId,
         pluginId,
         codeVerifier,
         redirectUrl,
+        clientId,
+        tokenUrl,
         expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
       });
 
@@ -413,18 +469,13 @@ export async function createRouter(
           pluginId,
           codeVerifier,
           redirectUrl,
+          clientId,
+          tokenUrl,
         } = connectState;
 
-        // Read provider config
-        const providerConfig = config.getConfig(
-          `auth.providerTokens.providers.${providerId}`,
-        );
-        const tokenUrl = providerConfig.getString('tokenUrl');
-        const clientId = providerConfig.getString('clientId');
-        const clientSecret = providerConfig.getOptionalString('clientSecret');
         const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
 
-        // Exchange code for tokens
+        // Exchange code for tokens (public client – no secret, uses PKCE)
         const tokenParams = new URLSearchParams({
           grant_type: 'authorization_code',
           code,
@@ -432,9 +483,6 @@ export async function createRouter(
           client_id: clientId,
           code_verifier: codeVerifier,
         });
-        if (clientSecret) {
-          tokenParams.set('client_secret', clientSecret);
-        }
 
         const tokenResponse = await fetch(tokenUrl, {
           method: 'POST',
