@@ -175,16 +175,31 @@ export async function createRouter(
     const providerTokenRouter = Router();
     const pts = options.providerTokenService;
 
-    // Get a provider token (service-to-service, for plugins)
+    // Get a provider token (service-to-service or user requesting own tokens)
     providerTokenRouter.get('/v1/provider-token', async (req, res) => {
-      await httpAuth.credentials(req, { allow: ['service'] });
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['service', 'user'],
+      });
       const providerId = req.query.provider as string;
       const pluginId = req.query.plugin as string;
-      const userEntityRef = req.query.user as string;
 
-      if (!providerId || !pluginId || !userEntityRef) {
+      // For user credentials, use the authenticated user; for service, require explicit user param
+      let userEntityRef: string;
+      if (credentials.principal.type === 'user') {
+        userEntityRef = credentials.principal.userEntityRef;
+      } else {
+        userEntityRef = req.query.user as string;
+        if (!userEntityRef) {
+          res.status(400).json({
+            error: 'Missing user query parameter for service credentials',
+          });
+          return;
+        }
+      }
+
+      if (!providerId || !pluginId) {
         res.status(400).json({
-          error: 'Missing provider, plugin, or user query parameter',
+          error: 'Missing provider or plugin query parameter',
         });
         return;
       }
