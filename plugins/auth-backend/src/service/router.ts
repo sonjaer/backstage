@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import crypto from 'node:crypto';
 import express from 'express';
 import Router from 'express-promise-router';
 import cookieParser from 'cookie-parser';
@@ -175,6 +176,30 @@ export async function createRouter(
     const providerTokenRouter = Router();
     const pts = options.providerTokenService;
 
+    // In-memory state for OAuth connect flow (PoC – production would use DB/cache)
+    const connectStates = new Map<
+      string,
+      {
+        userEntityRef: string;
+        providerId: string;
+        pluginId: string;
+        codeVerifier: string;
+        redirectUrl?: string;
+        expiresAt: number;
+      }
+    >();
+
+    // Clean up expired states periodically
+    const stateCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [key, value] of connectStates) {
+        if (value.expiresAt < now) {
+          connectStates.delete(key);
+        }
+      }
+    }, 60 * 1000);
+    stateCleanupInterval.unref();
+
     // Get a provider token (service-to-service or user requesting own tokens)
     providerTokenRouter.get('/v1/provider-token', async (req, res) => {
       const credentials = await httpAuth.credentials(req, {
@@ -284,6 +309,188 @@ export async function createRouter(
       const grants = await pts.listGrants(userEntityRef);
       res.json({ grants });
     });
+
+    // Connect endpoint – user opens this to authorize a provider
+    providerTokenRouter.get('/v1/provider-token/connect', async (req, res) => {
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['user'],
+      });
+      const userEntityRef = credentials.principal.userEntityRef;
+      const providerId = req.query.provider as string;
+      const pluginId = req.query.plugin as string;
+      const redirectUrl = req.query.redirect as string;
+
+      if (!providerId || !pluginId) {
+        throw new InputError('Missing provider or plugin query parameter');
+      }
+
+      // Check for external provider config
+      const providerConfig = config.getOptionalConfig(
+        `auth.providerTokens.providers.${providerId}`,
+      );
+
+      if (!providerConfig) {
+        // Could be a registered Backstage provider – redirect to its /start endpoint
+        const providerStartUrl = `${authUrl}/${providerId}/start?env=development&origin=${encodeURIComponent(
+          appUrl,
+        )}`;
+        res.redirect(providerStartUrl);
+        return;
+      }
+
+      // External provider – handle OAuth ourselves
+      const authorizeUrl = providerConfig.getString('authorizeUrl');
+      const clientId = providerConfig.getString('clientId');
+      const scopes = providerConfig.getOptionalStringArray('scopes') ?? [];
+      const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
+
+      // Generate state
+      const state = crypto.randomBytes(32).toString('hex');
+      const codeVerifier = crypto.randomBytes(32).toString('base64url');
+      const codeChallenge = crypto
+        .createHash('sha256')
+        .update(codeVerifier)
+        .digest('base64url');
+
+      // Store state for callback verification (in-memory for PoC)
+      connectStates.set(state, {
+        userEntityRef,
+        providerId,
+        pluginId,
+        codeVerifier,
+        redirectUrl,
+        expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
+      });
+
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: callbackUrl,
+        scope: scopes.join(' '),
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+      });
+
+      // For Auth0, add audience if configured
+      const audience = providerConfig.getOptionalString('audience');
+      if (audience) {
+        params.set('audience', audience);
+      }
+
+      res.redirect(`${authorizeUrl}?${params.toString()}`);
+    });
+
+    // OAuth callback for external providers
+    providerTokenRouter.get(
+      '/v1/provider-token/connect/callback',
+      async (req, res) => {
+        const code = req.query.code as string;
+        const state = req.query.state as string;
+        const error = req.query.error as string;
+
+        if (error) {
+          res.status(400).send(`OAuth error: ${error}`);
+          return;
+        }
+
+        if (!code || !state) {
+          throw new InputError('Missing code or state parameter');
+        }
+
+        // Look up state
+        const connectState = connectStates.get(state);
+        if (!connectState || connectState.expiresAt < Date.now()) {
+          connectStates.delete(state);
+          res.status(400).send('Invalid or expired state. Please try again.');
+          return;
+        }
+        connectStates.delete(state);
+
+        const {
+          userEntityRef,
+          providerId,
+          pluginId,
+          codeVerifier,
+          redirectUrl,
+        } = connectState;
+
+        // Read provider config
+        const providerConfig = config.getConfig(
+          `auth.providerTokens.providers.${providerId}`,
+        );
+        const tokenUrl = providerConfig.getString('tokenUrl');
+        const clientId = providerConfig.getString('clientId');
+        const clientSecret = providerConfig.getOptionalString('clientSecret');
+        const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
+
+        // Exchange code for tokens
+        const tokenParams = new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: callbackUrl,
+          client_id: clientId,
+          code_verifier: codeVerifier,
+        });
+        if (clientSecret) {
+          tokenParams.set('client_secret', clientSecret);
+        }
+
+        const tokenResponse = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: tokenParams.toString(),
+        });
+
+        if (!tokenResponse.ok) {
+          const errorBody = await tokenResponse.text();
+          logger.error(
+            `Token exchange failed for provider ${providerId}: ${tokenResponse.status} ${errorBody}`,
+          );
+          res.status(502).send('Failed to exchange authorization code.');
+          return;
+        }
+
+        const tokenData = await tokenResponse.json();
+        const {
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          scope: grantedScopes,
+          expires_in: expiresIn,
+        } = tokenData as {
+          access_token: string;
+          refresh_token?: string;
+          scope?: string;
+          expires_in?: number;
+        };
+
+        // Store token + grant atomically
+        await pts.storeProviderToken({
+          userEntityRef,
+          providerId,
+          accessToken,
+          refreshToken,
+          scopes: grantedScopes,
+          accessTokenExpiresAt: expiresIn
+            ? new Date(Date.now() + expiresIn * 1000)
+            : undefined,
+        });
+
+        await pts.grantAccess({ userEntityRef, pluginId, providerId });
+
+        logger.info(
+          `Stored provider token for ${userEntityRef} / ${providerId} (plugin: ${pluginId})`,
+        );
+
+        if (redirectUrl) {
+          res.redirect(redirectUrl);
+        } else {
+          res.send(
+            '<html><body><h2>Connected!</h2><p>You can close this tab and return to your application.</p></body></html>',
+          );
+        }
+      },
+    );
 
     router.use(providerTokenRouter);
   }
