@@ -22,7 +22,17 @@ export class ProviderTokenService {
   readonly #db: ProviderTokenDatabase;
   readonly #encryptionKey: string;
 
-  constructor(options: { db: ProviderTokenDatabase; encryptionKey: string }) {
+  static create(options: {
+    db: ProviderTokenDatabase;
+    encryptionKey: string;
+  }): ProviderTokenService {
+    return new ProviderTokenService(options);
+  }
+
+  private constructor(options: {
+    db: ProviderTokenDatabase;
+    encryptionKey: string;
+  }) {
     this.#db = options.db;
     this.#encryptionKey = options.encryptionKey;
   }

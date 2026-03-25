@@ -48,10 +48,10 @@ export type ProviderToken = {
   id: string;
   userEntityRef: string;
   providerId: string;
-  encryptedRefreshToken: string | null;
-  encryptedAccessToken: string | null;
-  grantedScopes: string | null;
-  accessTokenExpiresAt: Date | null;
+  encryptedRefreshToken: string | undefined;
+  encryptedAccessToken: string | undefined;
+  grantedScopes: string | undefined;
+  accessTokenExpiresAt: Date | undefined;
   createdAt: Date;
   lastUsedAt: Date;
 };
@@ -198,19 +198,25 @@ export class ProviderTokenDatabase {
     providerId: string;
   }): Promise<void> {
     const { userEntityRef, pluginId, providerId } = options;
-    const existing = await this.#knex<DbProviderTokenGrantRow>(GRANTS_TABLE)
-      .where('user_entity_ref', userEntityRef)
-      .andWhere('plugin_id', pluginId)
-      .andWhere('provider_id', providerId)
-      .first();
-    if (existing) return;
-    await this.#knex<DbProviderTokenGrantRow>(GRANTS_TABLE).insert({
-      id: uuid(),
-      user_entity_ref: userEntityRef,
-      plugin_id: pluginId,
-      provider_id: providerId,
-      granted_at: this.#knex.fn.now(),
-    });
+    try {
+      await this.#knex<DbProviderTokenGrantRow>(GRANTS_TABLE).insert({
+        id: uuid(),
+        user_entity_ref: userEntityRef,
+        plugin_id: pluginId,
+        provider_id: providerId,
+        granted_at: this.#knex.fn.now(),
+      });
+    } catch (error) {
+      // Unique constraint violation = already exists, which is fine (idempotent)
+      const existing = await this.#knex<DbProviderTokenGrantRow>(GRANTS_TABLE)
+        .where('user_entity_ref', userEntityRef)
+        .andWhere('plugin_id', pluginId)
+        .andWhere('provider_id', providerId)
+        .first();
+      if (!existing) {
+        throw error; // Real error, not a duplicate
+      }
+    }
   }
 
   /**
@@ -264,12 +270,12 @@ export class ProviderTokenDatabase {
       id: row.id,
       userEntityRef: row.user_entity_ref,
       providerId: row.provider_id,
-      encryptedRefreshToken: row.encrypted_refresh_token,
-      encryptedAccessToken: row.encrypted_access_token,
-      grantedScopes: row.granted_scopes,
+      encryptedRefreshToken: row.encrypted_refresh_token ?? undefined,
+      encryptedAccessToken: row.encrypted_access_token ?? undefined,
+      grantedScopes: row.granted_scopes ?? undefined,
       accessTokenExpiresAt: row.access_token_expires_at
         ? new Date(row.access_token_expires_at)
-        : null,
+        : undefined,
       createdAt: new Date(row.created_at),
       lastUsedAt: new Date(row.last_used_at),
     };

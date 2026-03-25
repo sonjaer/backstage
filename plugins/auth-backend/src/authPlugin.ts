@@ -114,7 +114,7 @@ export const authPlugin = createBackendPlugin({
           );
           const knex = await database.getClient();
           const ptDb = ProviderTokenDatabase.create({ knex });
-          providerTokenService = new ProviderTokenService({
+          providerTokenService = ProviderTokenService.create({
             db: ptDb,
             encryptionKey,
           });

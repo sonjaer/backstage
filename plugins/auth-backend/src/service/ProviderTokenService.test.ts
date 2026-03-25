@@ -36,7 +36,7 @@ describe('ProviderTokenService', () => {
     });
 
     const db = ProviderTokenDatabase.create({ knex });
-    const service = new ProviderTokenService({ db, encryptionKey });
+    const service = ProviderTokenService.create({ db, encryptionKey });
     return { knex, db, service };
   }
 

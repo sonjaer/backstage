@@ -27,7 +27,7 @@ import {
 } from '@backstage/backend-plugin-api';
 import { AuthOwnershipResolver } from '@backstage/plugin-auth-node';
 import { CatalogService } from '@backstage/plugin-catalog-node';
-import { NotFoundError } from '@backstage/errors';
+import { InputError, NotFoundError } from '@backstage/errors';
 import { KeyStores } from '../identity/KeyStores';
 import { TokenFactory } from '../identity/TokenFactory';
 import { UserInfoDatabase } from '../database/UserInfoDatabase';
@@ -190,18 +190,14 @@ export async function createRouter(
       } else {
         userEntityRef = req.query.user as string;
         if (!userEntityRef) {
-          res.status(400).json({
-            error: 'Missing user query parameter for service credentials',
-          });
-          return;
+          throw new InputError(
+            'Missing user query parameter for service credentials',
+          );
         }
       }
 
       if (!providerId || !pluginId) {
-        res.status(400).json({
-          error: 'Missing provider or plugin query parameter',
-        });
-        return;
+        throw new InputError('Missing provider or plugin query parameter');
       }
 
       const result = await pts.getProviderToken({
@@ -230,8 +226,7 @@ export async function createRouter(
       const { pluginId, providerId } = req.body;
 
       if (!pluginId || !providerId) {
-        res.status(400).json({ error: 'Missing pluginId or providerId' });
-        return;
+        throw new InputError('Missing pluginId or providerId');
       }
 
       await pts.grantAccess({ userEntityRef, pluginId, providerId });
@@ -240,11 +235,14 @@ export async function createRouter(
 
     // Revoke consent
     providerTokenRouter.delete('/v1/provider-token/grant', async (req, res) => {
-      const credentials = await httpAuth.credentials(req, {
-        allow: ['user'],
-      });
+      const credentials = await httpAuth.credentials(req, { allow: ['user'] });
       const userEntityRef = credentials.principal.userEntityRef;
-      const { pluginId, providerId } = req.body;
+      const pluginId = req.query.plugin as string;
+      const providerId = req.query.provider as string;
+
+      if (!pluginId || !providerId) {
+        throw new InputError('Missing plugin or provider query parameter');
+      }
 
       await pts.revokeAccess(userEntityRef, pluginId, providerId);
       res.status(204).end();

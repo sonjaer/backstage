@@ -247,26 +247,27 @@ export function createOAuthRouteHandlers<TProfile>(
         if (options.providerTokenStore && signInResult) {
           try {
             const backstageToken = signInResult.token;
-            let userEntityRef = 'unknown';
-            if (backstageToken) {
+            if (!backstageToken) {
+              // Cannot determine userEntityRef without a token, skip storage
+            } else {
               const payload = JSON.parse(
                 Buffer.from(
                   backstageToken.split('.')[1],
                   'base64url',
                 ).toString(),
               );
-              userEntityRef = payload.sub;
+              const userEntityRef = payload.sub;
+              await options.providerTokenStore.storeToken({
+                userEntityRef,
+                providerId,
+                refreshToken: result.session.refreshToken,
+                accessToken: result.session.accessToken,
+                scopes: grantedScopes,
+                expiresInSeconds: result.session.expiresInSeconds,
+              });
             }
-            await options.providerTokenStore.storeToken({
-              userEntityRef,
-              providerId,
-              refreshToken: result.session.refreshToken,
-              accessToken: result.session.accessToken,
-              scopes: grantedScopes,
-              expiresInSeconds: result.session.expiresInSeconds,
-            });
-          } catch {
-            // Non-fatal: cookie flow still works as fallback
+          } catch (error) {
+            console.warn('Failed to store provider token server-side', error);
           }
         }
 
@@ -411,8 +412,8 @@ export function createOAuthRouteHandlers<TProfile>(
               scopes: grantedScope,
               expiresInSeconds: result.session.expiresInSeconds,
             });
-          } catch {
-            // Non-fatal
+          } catch (error) {
+            console.warn('Failed to store provider token server-side', error);
           }
         }
 
