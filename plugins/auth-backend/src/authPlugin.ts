@@ -29,6 +29,8 @@ import { catalogServiceRef } from '@backstage/plugin-catalog-node';
 import { createAuthActions } from './actions';
 import { createRouter } from './service/router';
 import { OfflineAccessService } from './service/OfflineAccessService';
+import { ProviderTokenService } from './service/ProviderTokenService';
+import { ProviderTokenDatabase } from './database/ProviderTokenDatabase';
 
 /**
  * Auth plugin
@@ -101,6 +103,23 @@ export const authPlugin = createBackendPlugin({
             })
           : undefined;
 
+        const providerTokensEnabled = config.getOptionalBoolean(
+          'auth.providerTokens.enabled',
+        );
+
+        let providerTokenService: ProviderTokenService | undefined;
+        if (providerTokensEnabled) {
+          const encryptionKey = config.getString(
+            'auth.providerTokens.encryptionKey',
+          );
+          const knex = await database.getClient();
+          const ptDb = ProviderTokenDatabase.create({ knex });
+          providerTokenService = new ProviderTokenService({
+            db: ptDb,
+            encryptionKey,
+          });
+        }
+
         const router = await createRouter({
           logger,
           config,
@@ -112,6 +131,7 @@ export const authPlugin = createBackendPlugin({
           ownershipResolver,
           httpAuth,
           offlineAccess,
+          providerTokenService,
         });
         httpRouter.addAuthPolicy({
           path: '/',

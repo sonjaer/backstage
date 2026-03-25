@@ -43,6 +43,7 @@ import { bindProviderRouters, ProviderFactories } from '../providers/router';
 import { OidcRouter } from './OidcRouter';
 import { OidcDatabase } from '../database/OidcDatabase';
 import { OfflineAccessService } from './OfflineAccessService';
+import { ProviderTokenService } from './ProviderTokenService';
 
 interface RouterOptions {
   logger: LoggerService;
@@ -56,6 +57,7 @@ interface RouterOptions {
   ownershipResolver?: AuthOwnershipResolver;
   httpAuth: HttpAuthService;
   offlineAccess?: OfflineAccessService;
+  providerTokenService?: ProviderTokenService;
 }
 
 export async function createRouter(
@@ -168,6 +170,83 @@ export async function createRouter(
   });
 
   router.use(oidcRouter.getRouter());
+
+  if (options.providerTokenService) {
+    const providerTokenRouter = Router();
+    const pts = options.providerTokenService;
+
+    // Get a provider token (service-to-service, for plugins)
+    providerTokenRouter.get('/v1/provider-token', async (req, res) => {
+      await httpAuth.credentials(req, { allow: ['service'] });
+      const providerId = req.query.provider as string;
+      const pluginId = req.query.plugin as string;
+      const userEntityRef = req.query.user as string;
+
+      if (!providerId || !pluginId || !userEntityRef) {
+        res.status(400).json({
+          error: 'Missing provider, plugin, or user query parameter',
+        });
+        return;
+      }
+
+      const result = await pts.getProviderToken({
+        userEntityRef,
+        providerId,
+        pluginId,
+      });
+
+      if (!result) {
+        res.status(404).json({
+          error: 'No token or consent not granted',
+          consentRequired: true,
+        });
+        return;
+      }
+
+      res.json({ accessToken: result.accessToken, scopes: result.scopes });
+    });
+
+    // Grant consent (user-facing)
+    providerTokenRouter.post('/v1/provider-token/grant', async (req, res) => {
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['user'],
+      });
+      const userEntityRef = credentials.principal.userEntityRef;
+      const { pluginId, providerId } = req.body;
+
+      if (!pluginId || !providerId) {
+        res.status(400).json({ error: 'Missing pluginId or providerId' });
+        return;
+      }
+
+      await pts.grantAccess({ userEntityRef, pluginId, providerId });
+      res.status(204).end();
+    });
+
+    // Revoke consent
+    providerTokenRouter.delete('/v1/provider-token/grant', async (req, res) => {
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['user'],
+      });
+      const userEntityRef = credentials.principal.userEntityRef;
+      const { pluginId, providerId } = req.body;
+
+      await pts.revokeAccess(userEntityRef, pluginId, providerId);
+      res.status(204).end();
+    });
+
+    // List grants for current user
+    providerTokenRouter.get('/v1/provider-token/grants', async (req, res) => {
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['user'],
+      });
+      const userEntityRef = credentials.principal.userEntityRef;
+      const grants = await pts.listGrants(userEntityRef);
+      res.json({ grants });
+    });
+
+    router.use(providerTokenRouter);
+  }
 
   // Gives a more helpful error message than a plain 404
   router.use('/:provider/', req => {
