@@ -1,5 +1,17 @@
 # @backstage/backend-test-utils
 
+## 1.11.2-next.1
+
+### Patch Changes
+
+- 4559806: Added support for typed `examples` on actions registered via the actions registry. Action authors can now provide examples with compile-time-checked `input` and `output` values that match their schema definitions.
+- Updated dependencies
+  - @backstage/backend-plugin-api@1.9.0-next.1
+  - @backstage/backend-defaults@0.16.1-next.1
+  - @backstage/backend-app-api@1.6.1-next.1
+  - @backstage/plugin-auth-node@0.6.15-next.1
+  - @backstage/plugin-events-node@0.4.21-next.1
+
 ## 1.11.2-next.0
 
 ### Patch Changes

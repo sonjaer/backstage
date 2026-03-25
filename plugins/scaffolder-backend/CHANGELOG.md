@@ -1,5 +1,22 @@
 # @backstage/plugin-scaffolder-backend
 
+## 3.3.0-next.1
+
+### Minor Changes
+
+- 309b712: Added a new `execute-template` actions registry action that executes a scaffolder template with provided input values and returns a task ID for tracking progress.
+
+### Patch Changes
+
+- 4559806: Removed unnecessary empty `examples` array from actions bridged via the actions registry.
+- Updated dependencies
+  - @backstage/backend-plugin-api@1.9.0-next.1
+  - @backstage/backend-openapi-utils@0.6.8-next.1
+  - @backstage/plugin-catalog-node@2.1.1-next.1
+  - @backstage/plugin-events-node@0.4.21-next.1
+  - @backstage/plugin-permission-node@0.10.12-next.1
+  - @backstage/plugin-scaffolder-node@0.13.1-next.1
+
 ## 3.2.1-next.0
 
 ### Patch Changes

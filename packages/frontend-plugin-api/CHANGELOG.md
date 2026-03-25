@@ -1,5 +1,11 @@
 # @backstage/frontend-plugin-api
 
+## 0.15.2-next.1
+
+### Patch Changes
+
+- ddc5247: Fixed `FlattenedMessages` type to avoid excessive type instantiation depth in TypeScript 6 when using `createTranslationRef` with the `translations` option.
+
 ## 0.15.2-next.0
 
 ### Patch Changes
