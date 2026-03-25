@@ -35,8 +35,8 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useAsync from 'react-use/esm/useAsync';
 import { catalogApiRef } from '../../../api';
-import { humanizeEntityRef } from '../../EntityRefLink';
 import { entityRouteRef } from '../../../routes';
+import { useEntityPresentation } from '../../../apis';
 import { EntityKindIcon } from './EntityKindIcon';
 import { catalogReactTranslationRef } from '../../../translation';
 import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
@@ -137,15 +137,7 @@ function CustomNode({ node }: DependencyGraphTypes.RenderNodeProps<NodeType>) {
   const paddedWidth = paddedIconWidth + width + padding * 2;
   const paddedHeight = height + padding * 2;
 
-  const displayTitle =
-    node.metadata.title ||
-    (node.kind && node.metadata.name && node.metadata.namespace
-      ? humanizeEntityRef({
-          kind: node.kind,
-          name: node.metadata.name,
-          namespace: node.metadata.namespace || '',
-        })
-      : node.id);
+  const { primaryTitle: displayTitle } = useEntityPresentation(node);
 
   const onClick = () => {
     navigate(

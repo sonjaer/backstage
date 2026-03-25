@@ -834,7 +834,7 @@ export function getEntitySourceLocation(
   scmIntegrationsApi: typeof scmIntegrationsApiRef.T,
 ): EntitySourceLocation | undefined;
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export function humanizeEntityRef(
   entityRef: Entity | CompoundEntityRef,
   opts?: {

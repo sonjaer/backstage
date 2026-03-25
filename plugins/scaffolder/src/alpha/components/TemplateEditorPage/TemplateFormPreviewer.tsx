@@ -24,7 +24,7 @@ import { makeStyles } from '@material-ui/core/styles';
 import { alertApiRef, useApi, useRouteRef } from '@backstage/core-plugin-api';
 import {
   catalogApiRef,
-  humanizeEntityRef,
+  defaultEntityPresentation,
 } from '@backstage/plugin-catalog-react';
 import {
   LayoutOptions,
@@ -169,9 +169,9 @@ export const TemplateFormPreviewer = ({
         .then(({ items }) =>
           setTemplateOptions(
             items.map(template => ({
-              label:
-                template.metadata.title ??
-                humanizeEntityRef(template, { defaultKind: 'template' }),
+              label: defaultEntityPresentation(template, {
+                defaultKind: 'template',
+              }).primaryTitle,
               value: template,
             })),
           ),

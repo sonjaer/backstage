@@ -24,7 +24,20 @@ import get from 'lodash/get';
 import { EntityRefPresentationSnapshot } from './EntityPresentationApi';
 
 /**
- * This returns the default representation of an entity.
+ * Returns the default representation of an entity.
+ *
+ * @remarks
+ *
+ * This is a synchronous helper that extracts a display name from an
+ * already-loaded entity or entity ref. It resolves `primaryTitle` as the
+ * first available value among `spec.profile.displayName`, `metadata.title`,
+ * and a shortened entity ref string.
+ *
+ * Use this in non-React contexts where hooks are not available, such as sort
+ * comparators, filter functions, table column factories, and data mappers.
+ * In React components, prefer the {@link useEntityPresentation} hook or the
+ * {@link EntityDisplayName} component, which support async enrichment via
+ * the {@link EntityPresentationApi}.
  *
  * @public
  * @param entityOrRef - Either an entity, or a ref to it.

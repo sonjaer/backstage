@@ -20,7 +20,7 @@ import { assertError } from '@backstage/errors';
 import { useTranslationRef } from '@backstage/frontend-plugin-api';
 import {
   catalogApiRef,
-  humanizeEntityRef,
+  defaultEntityPresentation,
 } from '@backstage/plugin-catalog-react';
 import Box from '@material-ui/core/Box';
 import FormHelperText from '@material-ui/core/FormHelperText';
@@ -162,7 +162,10 @@ export const StepPrepareCreatePullRequest = (
     });
 
     return groupEntities.items
-      .map(e => humanizeEntityRef(e, { defaultKind: 'group' }))
+      .map(
+        e =>
+          defaultEntityPresentation(e, { defaultKind: 'group' }).primaryTitle,
+      )
       .sort();
   });
 

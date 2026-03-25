@@ -22,11 +22,8 @@ import {
 } from '@backstage/catalog-model';
 import { OverflowTooltip, TableColumn } from '@backstage/core-components';
 import { getEntityRelations } from '../../utils';
-import {
-  EntityRefLink,
-  EntityRefLinks,
-  humanizeEntityRef,
-} from '../EntityRefLink';
+import { EntityRefLink, EntityRefLinks } from '../EntityRefLink';
+import { defaultEntityPresentation } from '../../apis';
 import { EntityTableColumnTitle } from './TitleColumn';
 
 /** @public */
@@ -36,12 +33,7 @@ export const columnFactories = Object.freeze({
   }): TableColumn<T> {
     const { defaultKind } = options;
     function formatContent(entity: T): string {
-      return (
-        entity.metadata?.title ||
-        humanizeEntityRef(entity, {
-          defaultKind,
-        })
-      );
+      return defaultEntityPresentation(entity, { defaultKind }).primaryTitle;
     }
 
     return {
@@ -84,7 +76,7 @@ export const columnFactories = Object.freeze({
 
     function formatContent(entity: T): string {
       return getRelations(entity)
-        .map(r => humanizeEntityRef(r, { defaultKind }))
+        .map(r => defaultEntityPresentation(r, { defaultKind }).primaryTitle)
         .join(', ');
     }
 

@@ -29,8 +29,8 @@ import {
   WarningPanel,
 } from '@backstage/core-components';
 import {
+  defaultEntityPresentation,
   getEntityRelations,
-  humanizeEntityRef,
   useEntityList,
   useStarredEntities,
 } from '@backstage/plugin-catalog-react';
@@ -71,10 +71,8 @@ export interface CatalogTableProps {
 
 const refCompare = (a: Entity, b: Entity) => {
   const toRef = (entity: Entity) =>
-    entity.metadata.title ||
-    humanizeEntityRef(entity, {
-      defaultKind: 'Component',
-    });
+    defaultEntityPresentation(entity, { defaultKind: 'Component' })
+      .primaryTitle;
 
   return toRef(a).localeCompare(toRef(b));
 };
@@ -292,19 +290,21 @@ function toEntityRow(entity: Entity) {
       // This name is here for backwards compatibility mostly; the
       // presentation of refs in the table should in general be handled with
       // EntityRefLink / EntityName components
-      name: humanizeEntityRef(entity, {
-        defaultKind: 'Component',
-      }),
+      name: defaultEntityPresentation(entity, { defaultKind: 'Component' })
+        .primaryTitle,
       entityRef: stringifyEntityRef(entity),
       ownedByRelationsTitle: ownedByRelations
-        .map(r => humanizeEntityRef(r, { defaultKind: 'group' }))
+        .map(
+          r =>
+            defaultEntityPresentation(r, { defaultKind: 'group' }).primaryTitle,
+        )
         .join(', '),
       ownedByRelations,
       partOfSystemRelationTitle: partOfSystemRelations
-        .map(r =>
-          humanizeEntityRef(r, {
-            defaultKind: 'system',
-          }),
+        .map(
+          r =>
+            defaultEntityPresentation(r, { defaultKind: 'system' })
+              .primaryTitle,
         )
         .join(', '),
       partOfSystemRelations,

@@ -20,11 +20,8 @@ import {
   RELATION_PART_OF,
 } from '@backstage/catalog-model';
 import { Cell, CellText, Column, ColumnConfig, TableItem } from '@backstage/ui';
-import {
-  EntityRefLink,
-  EntityRefLinks,
-  humanizeEntityRef,
-} from '../EntityRefLink';
+import { EntityRefLink, EntityRefLinks } from '../EntityRefLink';
+import { defaultEntityPresentation } from '../../apis';
 import { EntityTableColumnTitle } from '../EntityTable/TitleColumn';
 import { getEntityRelations } from '../../utils';
 
@@ -63,8 +60,8 @@ export const columnFactories = Object.freeze({
         </Cell>
       ),
       sortValue: entity =>
-        entity.metadata?.title ||
-        humanizeEntityRef(entity, { defaultKind: options.defaultKind }),
+        defaultEntityPresentation(entity, { defaultKind: options.defaultKind })
+          .primaryTitle,
     };
   },
 
@@ -98,7 +95,12 @@ export const columnFactories = Object.freeze({
       ),
       sortValue: entity =>
         getEntityRelations(entity, options.relation, options.filter)
-          .map(r => humanizeEntityRef(r, { defaultKind: options.defaultKind }))
+          .map(
+            r =>
+              defaultEntityPresentation(r, {
+                defaultKind: options.defaultKind,
+              }).primaryTitle,
+          )
           .join(', '),
     };
   },

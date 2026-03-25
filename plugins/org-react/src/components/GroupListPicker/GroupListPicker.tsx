@@ -17,7 +17,7 @@
 import { MouseEvent, useState, useCallback } from 'react';
 import {
   catalogApiRef,
-  humanizeEntityRef,
+  defaultEntityPresentation,
 } from '@backstage/plugin-catalog-react';
 import TextField from '@material-ui/core/TextField';
 import Autocomplete from '@material-ui/lab/Autocomplete';
@@ -25,7 +25,7 @@ import useAsync from 'react-use/esm/useAsync';
 import Popover from '@material-ui/core/Popover';
 import { useApi } from '@backstage/core-plugin-api';
 import { ResponseErrorPanel } from '@backstage/core-components';
-import { Entity, GroupEntity } from '@backstage/catalog-model';
+import { GroupEntity } from '@backstage/catalog-model';
 import { GroupListPickerButton } from './GroupListPickerButton';
 
 /**
@@ -85,8 +85,6 @@ export const GroupListPicker = (props: GroupListPickerProps) => {
     return <ResponseErrorPanel error={error} />;
   }
 
-  const getHumanEntityRef = (entity: Entity) => humanizeEntityRef(entity);
-
   return (
     <>
       <Popover
@@ -101,7 +99,7 @@ export const GroupListPicker = (props: GroupListPickerProps) => {
           options={groups ?? []}
           groupBy={option => option.spec.type}
           getOptionLabel={option =>
-            option.spec.profile?.displayName ?? getHumanEntityRef(option)
+            defaultEntityPresentation(option).primaryTitle
           }
           inputValue={inputValue}
           onInputChange={(_, value) => setInputValue(value)}

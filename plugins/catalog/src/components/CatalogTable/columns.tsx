@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import {
-  humanizeEntityRef,
+  defaultEntityPresentation,
   EntityRefLink,
   EntityRefLinks,
 } from '@backstage/plugin-catalog-react';
@@ -33,12 +33,9 @@ export const columnFactories = Object.freeze({
     defaultKind?: string;
   }): TableColumn<CatalogTableRow> {
     function formatContent(entity: Entity): string {
-      return (
-        entity.metadata?.title ||
-        humanizeEntityRef(entity, {
-          defaultKind: options?.defaultKind,
-        })
-      );
+      return defaultEntityPresentation(entity, {
+        defaultKind: options?.defaultKind,
+      }).primaryTitle;
     }
 
     return {
