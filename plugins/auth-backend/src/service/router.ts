@@ -398,19 +398,62 @@ export async function createRouter(
     // --- Provider token API endpoints ---
     const providerTokenRouter = Router();
 
+    // Initiate a connect flow (service-only) – returns a connect URL with verified plugin identity
+    providerTokenRouter.post(
+      '/v1/provider-token/connect/initiate',
+      async (req, res) => {
+        const credentials = await httpAuth.credentials(req, {
+          allow: ['service'],
+        });
+        const pluginId = credentials.principal.subject;
+        const providerId = req.body.provider as string;
+        const userEntityRef = req.body.user as string;
+
+        if (!providerId || !userEntityRef) {
+          throw new InputError('Missing provider or user in request body');
+        }
+
+        // Create a connect session with the verified plugin identity
+        const sessionId = crypto.randomUUID();
+        const providerConfig = config.getOptionalConfig(
+          `auth.providerTokens.providers.${providerId}`,
+        );
+        const providerLabel =
+          providerConfig?.getOptionalString('label') ?? providerId;
+
+        connectStates.set(sessionId, {
+          pluginId,
+          providerId,
+          providerLabel,
+          userEntityRef: '', // Set when user authenticates via consent page
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
+        });
+
+        res.json({
+          connectUrl: `${appUrl}/oauth2/authorize/${sessionId}`,
+        });
+      },
+    );
+
     // Get a provider token (service-to-service or user requesting own tokens)
     providerTokenRouter.get('/v1/provider-token', async (req, res) => {
       const credentials = await httpAuth.credentials(req, {
         allow: ['service', 'user'],
       });
       const providerParam = req.query.provider as string;
-      const pluginId = req.query.plugin as string;
 
-      // For user credentials, use the authenticated user; for service, require explicit user param
+      // For service credentials: extract plugin ID from service token (verified, can't be faked)
+      // For user credentials: plugin query param is just for grant lookup
+      let pluginId: string;
       let userEntityRef: string;
       if (credentials.principal.type === 'user') {
         userEntityRef = credentials.principal.userEntityRef;
+        pluginId = req.query.plugin as string;
+        if (!pluginId) {
+          throw new InputError('Missing plugin query parameter');
+        }
       } else {
+        pluginId = credentials.principal.subject;
         userEntityRef = req.query.user as string;
         if (!userEntityRef) {
           throw new InputError(
@@ -419,8 +462,8 @@ export async function createRouter(
         }
       }
 
-      if (!providerParam || !pluginId) {
-        throw new InputError('Missing provider or plugin query parameter');
+      if (!providerParam) {
+        throw new InputError('Missing provider query parameter');
       }
 
       const providerIds = providerParam
@@ -434,17 +477,9 @@ export async function createRouter(
       });
 
       if (Object.keys(tokens).length === 0) {
-        const missingProviders: Record<string, { connectUrl: string }> = {};
-        for (const id of providerIds) {
-          missingProviders[id] = {
-            connectUrl: `/api/auth/v1/provider-token/connect?provider=${encodeURIComponent(
-              id,
-            )}&plugin=${encodeURIComponent(pluginId)}`,
-          };
-        }
         res.status(404).json({
           error: 'No token found for one or more providers',
-          missingProviders,
+          missingProviders: providerIds,
         });
         return;
       }
@@ -453,15 +488,7 @@ export async function createRouter(
       const missingIds = providerIds.filter(id => !tokens[id]);
       const response: Record<string, unknown> = { tokens };
       if (missingIds.length > 0) {
-        const missingProviders: Record<string, { connectUrl: string }> = {};
-        for (const id of missingIds) {
-          missingProviders[id] = {
-            connectUrl: `/api/auth/v1/provider-token/connect?provider=${encodeURIComponent(
-              id,
-            )}&plugin=${encodeURIComponent(pluginId)}`,
-          };
-        }
-        response.missingProviders = missingProviders;
+        response.missingProviders = missingIds;
       }
 
       res.json(response);
