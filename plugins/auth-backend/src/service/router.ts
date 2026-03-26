@@ -217,7 +217,7 @@ export async function createRouter(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_name: `Backstage Provider Token (${providerKey})`,
+          client_name: 'Backstage',
           redirect_uris: [callbackUrl],
           token_endpoint_auth_method: 'none',
           grant_types: ['authorization_code', 'refresh_token'],
@@ -277,7 +277,7 @@ export async function createRouter(
 
       const scopeText = providerConnected
         ? `wants to use your ${providerLabel} account`
-        : `wants to use your ${providerLabel} account. You haven't connected ${providerLabel} yet. Click Authorize to connect.`;
+        : `wants to use your ${providerLabel} account. You haven't connected ${providerLabel} yet. Click Authorize to connect and grant ${connectSession.pluginId} access.`;
 
       res.json({
         id: sessionId,
