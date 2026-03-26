@@ -171,7 +171,7 @@ export async function createRouter(
   });
 
   // Provider token connect session state and helpers.
-  // Defined before OidcRouter so the /v1/sessions/pt-* interceptors can
+  // Defined before OidcRouter so the /v1/sessions/* interceptors can
   // be registered first and match before the OIDC session handlers.
   if (options.providerTokenService) {
     // In-memory state for OAuth connect flow (PoC – production would use DB/cache)
@@ -242,13 +242,13 @@ export async function createRouter(
     const pts = options.providerTokenService;
 
     // --- Session endpoints for the existing frontend ConsentPage ---
-    // These intercept /v1/sessions/pt-* before the OidcRouter handles the
-    // same path pattern for OIDC authorization sessions. Non-pt- session IDs
-    // fall through to the OidcRouter via next().
+    // These intercept /v1/sessions/* for provider token sessions before the
+    // OidcRouter handles OIDC authorization sessions. Sessions not found in
+    // connectStates fall through to the OidcRouter via next().
 
     router.get('/v1/sessions/:sessionId', async (req, res, next) => {
       const { sessionId } = req.params;
-      if (!sessionId.startsWith('pt-')) {
+      if (!connectStates.has(sessionId)) {
         next();
         return;
       }
@@ -291,7 +291,7 @@ export async function createRouter(
 
     router.post('/v1/sessions/:sessionId/approve', async (req, res, next) => {
       const { sessionId } = req.params;
-      if (!sessionId.startsWith('pt-')) {
+      if (!connectStates.has(sessionId)) {
         next();
         return;
       }
@@ -383,7 +383,7 @@ export async function createRouter(
 
     router.post('/v1/sessions/:sessionId/reject', async (req, res, next) => {
       const { sessionId } = req.params;
-      if (!sessionId.startsWith('pt-')) {
+      if (!connectStates.has(sessionId)) {
         next();
         return;
       }
@@ -392,7 +392,7 @@ export async function createRouter(
       res.json({ redirectUrl: appUrl });
     });
 
-    // --- OidcRouter (handles non-pt- sessions) ---
+    // --- OidcRouter (handles OIDC sessions) ---
     router.use(oidcRouter.getRouter());
 
     // --- Provider token API endpoints ---
@@ -519,7 +519,7 @@ export async function createRouter(
       }
 
       // Generate session ID and PKCE
-      const sessionId = `pt-${crypto.randomBytes(16).toString('hex')}`;
+      const sessionId = crypto.randomUUID();
       const codeVerifier = crypto.randomBytes(32).toString('base64url');
       const codeChallenge = crypto
         .createHash('sha256')
@@ -564,7 +564,7 @@ export async function createRouter(
           throw new InputError('Missing code or state parameter');
         }
 
-        // Look up state (state is the sessionId, e.g. pt-abc123)
+        // Look up state (state is the sessionId)
         const connectState = connectStates.get(state);
         if (!connectState || connectState.expiresAt < Date.now()) {
           connectStates.delete(state);
