@@ -502,9 +502,9 @@ export async function createRouter(
         expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
       });
 
-      // Redirect to the existing frontend ConsentPage
+      // Redirect to the frontend ProviderConnectPage
       const consentUrl = new URL(
-        `./oauth2/authorize/${sessionId}`,
+        `./oauth2/provider-connect/${sessionId}`,
         appUrl.endsWith('/') ? appUrl : `${appUrl}/`,
       );
       res.redirect(consentUrl.toString());

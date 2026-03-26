@@ -13,22 +13,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { Routes, Route } from 'react-router-dom';
-import { ConsentPage } from './ConsentPage';
-import { ProviderConnectPage } from './ProviderConnectPage';
-
-/**
- * Router component for the auth plugin
- * @public
- */
-export const Router = () => {
-  return (
-    <Routes>
-      <Route path="/authorize/:sessionId" element={<ConsentPage />} />
-      <Route
-        path="/provider-connect/:sessionId"
-        element={<ProviderConnectPage />}
-      />
-    </Routes>
-  );
-};
+export { ProviderConnectPage } from './ProviderConnectPage';
