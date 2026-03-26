@@ -266,10 +266,18 @@ export async function createRouter(
       const providerLabel =
         providerConfig?.getOptionalString('label') ?? connectSession.providerId;
 
-      // Check if user already has a token for this provider
-      // (need user identity from the session – set on approve, but we can check by providerId)
-      const existingProviders = connectSession.userEntityRef
-        ? await pts.listProviders(connectSession.userEntityRef)
+      // Check if the authenticated user already has a token for this provider
+      let currentUserRef: string | undefined;
+      try {
+        const credentials = await httpAuth.credentials(req);
+        if (options.auth.isPrincipal(credentials, 'user')) {
+          currentUserRef = credentials.principal.userEntityRef;
+        }
+      } catch {
+        // Not authenticated yet – that's fine, we'll show the full text
+      }
+      const existingProviders = currentUserRef
+        ? await pts.listProviders(currentUserRef)
         : [];
       const providerConnected = existingProviders.includes(
         connectSession.providerId,
