@@ -57,6 +57,17 @@ export interface OAuthRouteHandlersOptions<TProfile> {
   profileTransform?: ProfileTransform<OAuthAuthenticatorResult<TProfile>>;
   cookieConfigurer?: CookieConfigurer;
   signInResolver?: SignInResolver<OAuthAuthenticatorResult<TProfile>>;
+  /** Optional server-side store for provider tokens */
+  providerTokenStore?: {
+    storeToken(options: {
+      userEntityRef: string;
+      providerId: string;
+      refreshToken?: string;
+      accessToken: string;
+      scopes: string;
+      expiresInSeconds?: number;
+    }): Promise<void>;
+  };
 }
 
 /** @internal */
@@ -232,6 +243,34 @@ export function createOAuthRouteHandlers<TProfile>(
           );
         }
 
+        // Store provider tokens server-side if configured
+        if (options.providerTokenStore && signInResult) {
+          try {
+            const backstageToken = signInResult.token;
+            if (!backstageToken) {
+              // Cannot determine userEntityRef without a token, skip storage
+            } else {
+              const payload = JSON.parse(
+                Buffer.from(
+                  backstageToken.split('.')[1],
+                  'base64url',
+                ).toString(),
+              );
+              const userEntityRef = payload.sub;
+              await options.providerTokenStore.storeToken({
+                userEntityRef,
+                providerId,
+                refreshToken: result.session.refreshToken,
+                accessToken: result.session.accessToken,
+                scopes: grantedScopes,
+                expiresInSeconds: result.session.expiresInSeconds,
+              });
+            }
+          } catch (error) {
+            console.warn('Failed to store provider token server-side', error);
+          }
+        }
+
         // When using the redirect flow we rely on refresh token we just
         // acquired to get a new session once we're back in the app.
         if (state.flow === 'redirect') {
@@ -354,6 +393,28 @@ export function createOAuthRouteHandlers<TProfile>(
           );
           response.backstageIdentity =
             prepareBackstageIdentityResponse(identity);
+        }
+
+        // Update server-side store if configured
+        if (options.providerTokenStore && response.backstageIdentity) {
+          try {
+            const payload = JSON.parse(
+              Buffer.from(
+                response.backstageIdentity.token.split('.')[1],
+                'base64url',
+              ).toString(),
+            );
+            await options.providerTokenStore.storeToken({
+              userEntityRef: payload.sub,
+              providerId,
+              refreshToken: newRefreshToken || refreshToken,
+              accessToken: result.session.accessToken,
+              scopes: grantedScope,
+              expiresInSeconds: result.session.expiresInSeconds,
+            });
+          } catch (error) {
+            console.warn('Failed to store provider token server-side', error);
+          }
         }
 
         res.status(200).json(response);

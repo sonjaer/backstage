@@ -43,6 +43,8 @@ import { bindProviderRouters, ProviderFactories } from '../providers/router';
 import { OidcRouter } from './OidcRouter';
 import { OidcDatabase } from '../database/OidcDatabase';
 import { OfflineAccessService } from './OfflineAccessService';
+import { ProviderTokenService } from './ProviderTokenService';
+import { createProviderTokenRouters } from './providerTokenRouter';
 
 interface RouterOptions {
   logger: LoggerService;
@@ -56,6 +58,7 @@ interface RouterOptions {
   ownershipResolver?: AuthOwnershipResolver;
   httpAuth: HttpAuthService;
   offlineAccess?: OfflineAccessService;
+  providerTokenService?: ProviderTokenService;
 }
 
 export async function createRouter(
@@ -167,7 +170,28 @@ export async function createRouter(
     offlineAccess: options.offlineAccess,
   });
 
-  router.use(oidcRouter.getRouter());
+  // Provider token connect session state and helpers.
+  // Defined before OidcRouter so the /v1/sessions/* interceptors can
+  // be registered first and match before the OIDC session handlers.
+  if (options.providerTokenService) {
+    const { sessionRouter, apiRouter } = createProviderTokenRouters({
+      httpAuth,
+      auth: options.auth,
+      config,
+      pts: options.providerTokenService,
+      logger,
+      appUrl,
+      authUrl,
+    });
+
+    // Session interceptors must be mounted before OidcRouter
+    router.use(sessionRouter);
+    router.use(oidcRouter.getRouter());
+    router.use(apiRouter);
+  } else {
+    // No provider token service – mount OidcRouter without session interceptors
+    router.use(oidcRouter.getRouter());
+  }
 
   // Gives a more helpful error message than a plain 404
   router.use('/:provider/', req => {
