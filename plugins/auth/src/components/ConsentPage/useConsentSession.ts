@@ -37,6 +37,7 @@ interface Session {
   codeChallenge?: string;
   codeChallengeMethod?: string;
   expiresAt?: string;
+  description?: string;
 }
 
 type ConsentState =

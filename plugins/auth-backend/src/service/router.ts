@@ -275,7 +275,7 @@ export async function createRouter(
         connectSession.providerId,
       );
 
-      const scopeText = providerConnected
+      const description = providerConnected
         ? `wants to use your ${providerLabel} account`
         : `wants to use your ${providerLabel} account. You haven't connected ${providerLabel} yet. Click Authorize to connect and grant ${connectSession.pluginId} access.`;
 
@@ -283,7 +283,7 @@ export async function createRouter(
         id: sessionId,
         clientName: connectSession.pluginId,
         clientId: connectSession.pluginId,
-        scope: scopeText,
+        description,
         redirectUri: `${authUrl}/v1/provider-token/connect/callback`,
         providerConnected,
       });

@@ -144,8 +144,8 @@ export const ConsentPage = () => {
                   {appName}
                 </Text>
                 <Text variant="body-small" color="secondary">
-                  {session.scope
-                    ? session.scope
+                  {session.description
+                    ? session.description
                     : `wants to access your ${appTitle} account`}
                 </Text>
               </Flex>
@@ -159,7 +159,7 @@ export const ConsentPage = () => {
               title="Security Notice"
               description={
                 <>
-                  {session.scope
+                  {session.description
                     ? `By authorizing, you are granting ${appName} access to make requests on your behalf.`
                     : `By authorizing this application, you are granting it access to your ${appTitle} account. The application will receive an access token that allows it to act on your behalf.`}
                   <div className={styles.callbackUrl}>
