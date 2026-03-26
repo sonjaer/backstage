@@ -350,24 +350,77 @@ export async function createRouter(
       return data.client_id;
     };
 
-    // Connect endpoint – user opens this to authorize a provider
+    // Connect consent page – shows what plugin wants access (no auth required, just a page)
     providerTokenRouter.get('/v1/provider-token/connect', async (req, res) => {
-      const credentials = await httpAuth.credentials(req, {
-        allow: ['user'],
-      });
-      const userEntityRef = credentials.principal.userEntityRef;
       const providerId = req.query.provider as string;
       const pluginId = req.query.plugin as string;
       const redirectUrl = req.query.redirect as string;
+      const confirmed = req.query.confirmed as string;
 
       if (!providerId || !pluginId) {
         throw new InputError('Missing provider or plugin query parameter');
       }
 
-      // Check for external provider config
+      // Check for external provider config (needed for label and OAuth)
       const providerConfig = config.getOptionalConfig(
         `auth.providerTokens.providers.${providerId}`,
       );
+      const providerLabel =
+        providerConfig?.getOptionalString('label') ?? providerId;
+
+      // If not yet confirmed, show consent page (no auth needed – just informational)
+      if (confirmed !== 'true') {
+        const confirmUrl = `${authUrl}/v1/provider-token/connect?${new URLSearchParams(
+          {
+            provider: providerId,
+            plugin: pluginId,
+            ...(redirectUrl ? { redirect: redirectUrl } : {}),
+            confirmed: 'true',
+          },
+        )}`;
+
+        res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorize ${pluginId}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
+    .card { background: white; border-radius: 12px; padding: 40px; max-width: 420px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
+    h2 { margin: 0 0 8px; color: #1a1a1a; }
+    .plugin-name { color: #6200ea; font-weight: 600; }
+    .provider-name { color: #0277bd; font-weight: 600; }
+    p { color: #666; line-height: 1.5; margin: 16px 0; }
+    .scopes { background: #f5f5f5; border-radius: 8px; padding: 12px 16px; text-align: left; margin: 16px 0; font-size: 14px; color: #444; }
+    .buttons { display: flex; gap: 12px; margin-top: 24px; }
+    .btn { flex: 1; padding: 12px; border-radius: 8px; font-size: 16px; cursor: pointer; border: none; }
+    .btn-authorize { background: #6200ea; color: white; }
+    .btn-authorize:hover { background: #5000d0; }
+    .btn-deny { background: #e0e0e0; color: #333; }
+    .btn-deny:hover { background: #d0d0d0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Authorize Access</h2>
+    <p><span class="plugin-name">${pluginId}</span> wants access to your <span class="provider-name">${providerLabel}</span> account.</p>
+    <div class="scopes">
+      This will allow <strong>${pluginId}</strong> to make requests on your behalf using your ${providerLabel} credentials.
+    </div>
+    <div class="buttons">
+      <button class="btn btn-deny" onclick="window.close()">Deny</button>
+      <a href="${confirmUrl}" class="btn btn-authorize" style="text-decoration:none; display:flex; align-items:center; justify-content:center;">Authorize</a>
+    </div>
+  </div>
+</body>
+</html>`);
+        return;
+      }
+
+      // Confirmed – proceed with OAuth (requires auth)
+      const credentials = await httpAuth.credentials(req, {
+        allow: ['user'],
+      });
+      const userEntityRef = credentials.principal.userEntityRef;
 
       if (!providerConfig) {
         // Could be a registered Backstage provider – redirect to its /start endpoint
