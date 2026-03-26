@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import {
+  RootConfigService,
+  LoggerService,
+} from '@backstage/backend-plugin-api';
 import { ProviderTokenDatabase } from '../database/ProviderTokenDatabase';
 import { encryptToken, decryptToken } from '../lib/tokenEncryption';
 
@@ -21,10 +25,14 @@ import { encryptToken, decryptToken } from '../lib/tokenEncryption';
 export class ProviderTokenService {
   readonly #db: ProviderTokenDatabase;
   readonly #encryptionKey: string;
+  readonly #config: RootConfigService;
+  readonly #logger: LoggerService;
 
   static create(options: {
     db: ProviderTokenDatabase;
     encryptionKey: string;
+    config: RootConfigService;
+    logger: LoggerService;
   }): ProviderTokenService {
     return new ProviderTokenService(options);
   }
@@ -32,9 +40,13 @@ export class ProviderTokenService {
   private constructor(options: {
     db: ProviderTokenDatabase;
     encryptionKey: string;
+    config: RootConfigService;
+    logger: LoggerService;
   }) {
     this.#db = options.db;
     this.#encryptionKey = options.encryptionKey;
+    this.#config = options.config;
+    this.#logger = options.logger;
   }
 
   async storeProviderToken(options: {
@@ -86,10 +98,43 @@ export class ProviderTokenService {
       return undefined;
     }
 
+    let accessToken = token.encryptedAccessToken
+      ? decryptToken(token.encryptedAccessToken, this.#encryptionKey)
+      : '';
+
+    // Auto-refresh if access token is expired and we have a refresh token
+    const isExpired =
+      token.accessTokenExpiresAt &&
+      new Date(token.accessTokenExpiresAt) < new Date();
+
+    if (isExpired && token.encryptedRefreshToken) {
+      const refreshed = await this.#refreshAccessToken(
+        providerId,
+        decryptToken(token.encryptedRefreshToken, this.#encryptionKey),
+      );
+      if (refreshed) {
+        accessToken = refreshed.accessToken;
+        await this.#db.updateAccessToken(
+          userEntityRef,
+          providerId,
+          encryptToken(refreshed.accessToken, this.#encryptionKey),
+          refreshed.expiresAt,
+        );
+        this.#logger.debug(
+          `Refreshed access token for ${userEntityRef} / ${providerId}`,
+        );
+      } else {
+        // Refresh failed – token may be revoked
+        this.#logger.warn(
+          `Failed to refresh token for ${userEntityRef} / ${providerId}, deleting stored token`,
+        );
+        await this.#db.deleteToken(userEntityRef, providerId);
+        return undefined;
+      }
+    }
+
     return {
-      accessToken: token.encryptedAccessToken
-        ? decryptToken(token.encryptedAccessToken, this.#encryptionKey)
-        : '',
+      accessToken,
       refreshToken: token.encryptedRefreshToken
         ? decryptToken(token.encryptedRefreshToken, this.#encryptionKey)
         : undefined,
@@ -142,6 +187,60 @@ export class ProviderTokenService {
       }
     }
     return result;
+  }
+
+  async #refreshAccessToken(
+    providerId: string,
+    refreshToken: string,
+  ): Promise<{ accessToken: string; expiresAt: Date } | undefined> {
+    const providerConfig = this.#config.getOptionalConfig(
+      `auth.providerTokens.providers.${providerId}`,
+    );
+    if (!providerConfig) {
+      this.#logger.warn(
+        `No config for provider ${providerId}, cannot refresh token`,
+      );
+      return undefined;
+    }
+
+    const tokenUrl = providerConfig.getString('tokenUrl');
+    const clientId = providerConfig.getOptionalString('clientId');
+
+    const params = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+    if (clientId) {
+      params.set('client_id', clientId);
+    }
+
+    try {
+      const response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      if (!response.ok) {
+        this.#logger.warn(
+          `Token refresh failed for ${providerId}: ${response.status}`,
+        );
+        return undefined;
+      }
+
+      const data = (await response.json()) as {
+        access_token: string;
+        expires_in?: number;
+      };
+
+      return {
+        accessToken: data.access_token,
+        expiresAt: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+      };
+    } catch (error) {
+      this.#logger.warn(`Token refresh error for ${providerId}`, error);
+      return undefined;
+    }
   }
 
   async listProviders(userEntityRef: string) {

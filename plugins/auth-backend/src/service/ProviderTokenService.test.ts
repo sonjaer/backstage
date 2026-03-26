@@ -36,7 +36,22 @@ describe('ProviderTokenService', () => {
     });
 
     const db = ProviderTokenDatabase.create({ knex });
-    const service = ProviderTokenService.create({ db, encryptionKey });
+    const mockConfig = {
+      getOptionalConfig: () => undefined,
+    } as any;
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      child: () => mockLogger,
+    } as any;
+    const service = ProviderTokenService.create({
+      db,
+      encryptionKey,
+      config: mockConfig,
+      logger: mockLogger,
+    });
     return { knex, db, service };
   }
 

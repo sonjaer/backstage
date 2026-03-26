@@ -117,6 +117,8 @@ export const authPlugin = createBackendPlugin({
           providerTokenService = ProviderTokenService.create({
             db: ptDb,
             encryptionKey,
+            config,
+            logger,
           });
         }
 
