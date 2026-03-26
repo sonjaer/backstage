@@ -239,6 +239,8 @@ export async function createRouter(
       return data.client_id;
     };
 
+    const pts = options.providerTokenService;
+
     // --- Session endpoints for the existing frontend ConsentPage ---
     // These intercept /v1/sessions/pt-* before the OidcRouter handles the
     // same path pattern for OIDC authorization sessions. Non-pt- session IDs
@@ -264,12 +266,26 @@ export async function createRouter(
       const providerLabel =
         providerConfig?.getOptionalString('label') ?? connectSession.providerId;
 
+      // Check if user already has a token for this provider
+      // (need user identity from the session – set on approve, but we can check by providerId)
+      const existingProviders = connectSession.userEntityRef
+        ? await pts.listProviders(connectSession.userEntityRef)
+        : [];
+      const providerConnected = existingProviders.includes(
+        connectSession.providerId,
+      );
+
+      const scopeText = providerConnected
+        ? `wants to use your ${providerLabel} account`
+        : `wants to use your ${providerLabel} account. You haven't connected ${providerLabel} yet. Click Authorize to connect.`;
+
       res.json({
         id: sessionId,
         clientName: connectSession.pluginId,
         clientId: connectSession.pluginId,
-        scope: `Access your ${providerLabel} account`,
+        scope: scopeText,
         redirectUri: `${authUrl}/v1/provider-token/connect/callback`,
+        providerConnected,
       });
     });
 
@@ -296,7 +312,29 @@ export async function createRouter(
       // Set user identity from the authenticated request
       connectSession.userEntityRef = credentials.principal.userEntityRef;
 
-      // Build the OAuth authorize URL for the external provider
+      // Check if user already has a token for this provider
+      const existingProviders = await pts.listProviders(
+        connectSession.userEntityRef,
+      );
+      if (existingProviders.includes(connectSession.providerId)) {
+        // Provider already connected – just store the grant
+        await pts.grantAccess({
+          userEntityRef: connectSession.userEntityRef,
+          pluginId: connectSession.pluginId,
+          providerId: connectSession.providerId,
+        });
+        connectStates.delete(sessionId);
+        logger.info(
+          `Granted ${connectSession.pluginId} access to ${connectSession.providerId} for ${connectSession.userEntityRef} (provider already connected)`,
+        );
+        // Return success URL – the ConsentPage will show "completed" state
+        res.json({
+          redirectUrl: `${appUrl}`,
+        });
+        return;
+      }
+
+      // Provider not connected – build the OAuth authorize URL
       const providerConfig = config.getConfig(
         `auth.providerTokens.providers.${connectSession.providerId}`,
       );
@@ -359,7 +397,6 @@ export async function createRouter(
 
     // --- Provider token API endpoints ---
     const providerTokenRouter = Router();
-    const pts = options.providerTokenService;
 
     // Get a provider token (service-to-service or user requesting own tokens)
     providerTokenRouter.get('/v1/provider-token', async (req, res) => {
@@ -502,9 +539,9 @@ export async function createRouter(
         expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
       });
 
-      // Redirect to the frontend ProviderConnectPage
+      // Redirect to the existing ConsentPage
       const consentUrl = new URL(
-        `./oauth2/provider-connect/${sessionId}`,
+        `./oauth2/authorize/${sessionId}`,
         appUrl.endsWith('/') ? appUrl : `${appUrl}/`,
       );
       res.redirect(consentUrl.toString());

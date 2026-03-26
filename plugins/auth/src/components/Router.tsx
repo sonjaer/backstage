@@ -15,7 +15,6 @@
  */
 import { Routes, Route } from 'react-router-dom';
 import { ConsentPage } from './ConsentPage';
-import { ProviderConnectPage } from './ProviderConnectPage';
 
 /**
  * Router component for the auth plugin
@@ -25,10 +24,6 @@ export const Router = () => {
   return (
     <Routes>
       <Route path="/authorize/:sessionId" element={<ConsentPage />} />
-      <Route
-        path="/provider-connect/:sessionId"
-        element={<ProviderConnectPage />}
-      />
     </Routes>
   );
 };
