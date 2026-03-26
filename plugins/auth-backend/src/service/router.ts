@@ -170,12 +170,10 @@ export async function createRouter(
     offlineAccess: options.offlineAccess,
   });
 
-  router.use(oidcRouter.getRouter());
-
+  // Provider token connect session state and helpers.
+  // Defined before OidcRouter so the /v1/sessions/pt-* interceptors can
+  // be registered first and match before the OIDC session handlers.
   if (options.providerTokenService) {
-    const providerTokenRouter = Router();
-    const pts = options.providerTokenService;
-
     // In-memory state for OAuth connect flow (PoC – production would use DB/cache)
     const connectStates = new Map<
       string,
@@ -184,6 +182,7 @@ export async function createRouter(
         providerId: string;
         pluginId: string;
         codeVerifier: string;
+        codeChallenge: string;
         clientId: string;
         tokenUrl: string;
         redirectUrl?: string;
@@ -201,6 +200,166 @@ export async function createRouter(
       }
     }, 60 * 1000);
     stateCleanupInterval.unref();
+
+    // Cache for DCR-registered client IDs (provider -> clientId)
+    const dcrClients = new Map<string, string>();
+
+    // Register a client dynamically via OpenID Connect DCR
+    const ensureDcrClient = async (
+      dcrUrl: string,
+      callbackUrl: string,
+      providerKey: string,
+    ): Promise<string> => {
+      const cached = dcrClients.get(providerKey);
+      if (cached) return cached;
+
+      const dcrRes = await fetch(dcrUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_name: `Backstage Provider Token (${providerKey})`,
+          redirect_uris: [callbackUrl],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          application_type: 'native',
+        }),
+      });
+
+      if (!dcrRes.ok) {
+        const body = await dcrRes.text();
+        throw new Error(`DCR registration failed (${dcrRes.status}): ${body}`);
+      }
+
+      const data = (await dcrRes.json()) as { client_id: string };
+      dcrClients.set(providerKey, data.client_id);
+      logger.info(
+        `Registered OAuth client via DCR for ${providerKey}: ${data.client_id}`,
+      );
+      return data.client_id;
+    };
+
+    // --- Session endpoints for the existing frontend ConsentPage ---
+    // These intercept /v1/sessions/pt-* before the OidcRouter handles the
+    // same path pattern for OIDC authorization sessions. Non-pt- session IDs
+    // fall through to the OidcRouter via next().
+
+    router.get('/v1/sessions/:sessionId', async (req, res, next) => {
+      const { sessionId } = req.params;
+      if (!sessionId.startsWith('pt-')) {
+        next();
+        return;
+      }
+
+      const connectSession = connectStates.get(sessionId);
+      if (!connectSession || connectSession.expiresAt < Date.now()) {
+        connectStates.delete(sessionId);
+        res.status(404).json({ error: 'Session not found or expired' });
+        return;
+      }
+
+      const providerConfig = config.getOptionalConfig(
+        `auth.providerTokens.providers.${connectSession.providerId}`,
+      );
+      const providerLabel =
+        providerConfig?.getOptionalString('label') ?? connectSession.providerId;
+
+      res.json({
+        id: sessionId,
+        clientName: connectSession.pluginId,
+        clientId: connectSession.pluginId,
+        scope: `Access your ${providerLabel} account`,
+        redirectUri: `${authUrl}/v1/provider-token/connect/callback`,
+      });
+    });
+
+    router.post('/v1/sessions/:sessionId/approve', async (req, res, next) => {
+      const { sessionId } = req.params;
+      if (!sessionId.startsWith('pt-')) {
+        next();
+        return;
+      }
+
+      const credentials = await httpAuth.credentials(req);
+      if (!options.auth.isPrincipal(credentials, 'user')) {
+        res.status(403).json({ error: 'Authentication required' });
+        return;
+      }
+
+      const connectSession = connectStates.get(sessionId);
+      if (!connectSession || connectSession.expiresAt < Date.now()) {
+        connectStates.delete(sessionId);
+        res.status(404).json({ error: 'Session not found or expired' });
+        return;
+      }
+
+      // Set user identity from the authenticated request
+      connectSession.userEntityRef = credentials.principal.userEntityRef;
+
+      // Build the OAuth authorize URL for the external provider
+      const providerConfig = config.getConfig(
+        `auth.providerTokens.providers.${connectSession.providerId}`,
+      );
+      const authorizeUrl = providerConfig.getString('authorizeUrl');
+      const scopes = providerConfig.getOptionalStringArray('scopes') ?? [];
+      const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
+
+      // Get client ID via DCR or config
+      let clientId = providerConfig.getOptionalString('clientId');
+      const dcrUrl = providerConfig.getOptionalString('dcrUrl');
+      if (!clientId && dcrUrl) {
+        clientId = await ensureDcrClient(
+          dcrUrl,
+          callbackUrl,
+          connectSession.providerId,
+        );
+      }
+      if (!clientId) {
+        res.status(500).json({ error: 'No client ID available' });
+        return;
+      }
+
+      // Store clientId and tokenUrl in session for callback
+      connectSession.clientId = clientId;
+      connectSession.tokenUrl = providerConfig.getString('tokenUrl');
+
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: callbackUrl,
+        scope: scopes.join(' '),
+        state: sessionId,
+        code_challenge: connectSession.codeChallenge,
+        code_challenge_method: 'S256',
+      });
+
+      const audience = providerConfig.getOptionalString('audience');
+      if (audience) {
+        params.set('audience', audience);
+      }
+
+      res.json({
+        redirectUrl: `${authorizeUrl}?${params.toString()}`,
+      });
+    });
+
+    router.post('/v1/sessions/:sessionId/reject', async (req, res, next) => {
+      const { sessionId } = req.params;
+      if (!sessionId.startsWith('pt-')) {
+        next();
+        return;
+      }
+
+      connectStates.delete(sessionId);
+      res.json({ redirectUrl: appUrl });
+    });
+
+    // --- OidcRouter (handles non-pt- sessions) ---
+    router.use(oidcRouter.getRouter());
+
+    // --- Provider token API endpoints ---
+    const providerTokenRouter = Router();
+    const pts = options.providerTokenService;
 
     // Get a provider token (service-to-service or user requesting own tokens)
     providerTokenRouter.get('/v1/provider-token', async (req, res) => {
@@ -312,182 +471,43 @@ export async function createRouter(
       res.json({ grants });
     });
 
-    // Cache for DCR-registered client IDs (provider → clientId)
-    const dcrClients = new Map<string, string>();
-
-    // Register a client dynamically via OpenID Connect DCR
-    const ensureDcrClient = async (
-      dcrUrl: string,
-      callbackUrl: string,
-      providerKey: string,
-    ): Promise<string> => {
-      const cached = dcrClients.get(providerKey);
-      if (cached) return cached;
-
-      const res = await fetch(dcrUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_name: `Backstage Provider Token (${providerKey})`,
-          redirect_uris: [callbackUrl],
-          token_endpoint_auth_method: 'none',
-          grant_types: ['authorization_code', 'refresh_token'],
-          response_types: ['code'],
-          application_type: 'native',
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`DCR registration failed (${res.status}): ${body}`);
-      }
-
-      const data = (await res.json()) as { client_id: string };
-      dcrClients.set(providerKey, data.client_id);
-      logger.info(
-        `Registered OAuth client via DCR for ${providerKey}: ${data.client_id}`,
-      );
-      return data.client_id;
-    };
-
-    // Connect consent page – shows what plugin wants access (no auth required, just a page)
+    // Connect endpoint – creates a session and redirects to the frontend ConsentPage
     providerTokenRouter.get('/v1/provider-token/connect', async (req, res) => {
       const providerId = req.query.provider as string;
       const pluginId = req.query.plugin as string;
       const redirectUrl = req.query.redirect as string;
-      const confirmed = req.query.confirmed as string;
 
       if (!providerId || !pluginId) {
         throw new InputError('Missing provider or plugin query parameter');
       }
 
-      // Check for external provider config (needed for label and OAuth)
-      const providerConfig = config.getOptionalConfig(
-        `auth.providerTokens.providers.${providerId}`,
-      );
-      const providerLabel =
-        providerConfig?.getOptionalString('label') ?? providerId;
-
-      // If not yet confirmed, show consent page (no auth needed – just informational)
-      if (confirmed !== 'true') {
-        const confirmUrl = `${authUrl}/v1/provider-token/connect?${new URLSearchParams(
-          {
-            provider: providerId,
-            plugin: pluginId,
-            ...(redirectUrl ? { redirect: redirectUrl } : {}),
-            confirmed: 'true',
-          },
-        )}`;
-
-        res.send(`<!DOCTYPE html>
-<html>
-<head>
-  <title>Authorize ${pluginId}</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
-    .card { background: white; border-radius: 12px; padding: 40px; max-width: 420px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
-    h2 { margin: 0 0 8px; color: #1a1a1a; }
-    .plugin-name { color: #6200ea; font-weight: 600; }
-    .provider-name { color: #0277bd; font-weight: 600; }
-    p { color: #666; line-height: 1.5; margin: 16px 0; }
-    .scopes { background: #f5f5f5; border-radius: 8px; padding: 12px 16px; text-align: left; margin: 16px 0; font-size: 14px; color: #444; }
-    .buttons { display: flex; gap: 12px; margin-top: 24px; }
-    .btn { flex: 1; padding: 12px; border-radius: 8px; font-size: 16px; cursor: pointer; border: none; }
-    .btn-authorize { background: #6200ea; color: white; }
-    .btn-authorize:hover { background: #5000d0; }
-    .btn-deny { background: #e0e0e0; color: #333; }
-    .btn-deny:hover { background: #d0d0d0; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>Authorize Access</h2>
-    <p><span class="plugin-name">${pluginId}</span> wants access to your <span class="provider-name">${providerLabel}</span> account.</p>
-    <div class="scopes">
-      This will allow <strong>${pluginId}</strong> to make requests on your behalf using your ${providerLabel} credentials.
-    </div>
-    <div class="buttons">
-      <button class="btn btn-deny" onclick="window.close()">Deny</button>
-      <a href="${confirmUrl}" class="btn btn-authorize" style="text-decoration:none; display:flex; align-items:center; justify-content:center;">Authorize</a>
-    </div>
-  </div>
-</body>
-</html>`);
-        return;
-      }
-
-      // Confirmed – proceed with OAuth (requires auth)
-      const credentials = await httpAuth.credentials(req, {
-        allow: ['user'],
-      });
-      const userEntityRef = credentials.principal.userEntityRef;
-
-      if (!providerConfig) {
-        // Could be a registered Backstage provider – redirect to its /start endpoint
-        const providerStartUrl = `${authUrl}/${providerId}/start?env=development&origin=${encodeURIComponent(
-          appUrl,
-        )}`;
-        res.redirect(providerStartUrl);
-        return;
-      }
-
-      // External provider – handle OAuth ourselves
-      const authorizeUrl = providerConfig.getString('authorizeUrl');
-      const tokenUrl = providerConfig.getString('tokenUrl');
-      const scopes = providerConfig.getOptionalStringArray('scopes') ?? [];
-      const callbackUrl = `${authUrl}/v1/provider-token/connect/callback`;
-
-      // Get client ID – either static from config or via DCR
-      let clientId = providerConfig.getOptionalString('clientId');
-      const dcrUrl = providerConfig.getOptionalString('dcrUrl');
-
-      if (!clientId && dcrUrl) {
-        clientId = await ensureDcrClient(dcrUrl, callbackUrl, providerId);
-      }
-
-      if (!clientId) {
-        throw new InputError(
-          `Provider ${providerId} requires either clientId or dcrUrl in config`,
-        );
-      }
-
-      // Generate state
-      const state = crypto.randomBytes(32).toString('hex');
+      // Generate session ID and PKCE
+      const sessionId = `pt-${crypto.randomBytes(16).toString('hex')}`;
       const codeVerifier = crypto.randomBytes(32).toString('base64url');
       const codeChallenge = crypto
         .createHash('sha256')
         .update(codeVerifier)
         .digest('base64url');
 
-      // Store state for callback verification
-      connectStates.set(state, {
-        userEntityRef,
+      // Store session (user identity will be set when they approve)
+      connectStates.set(sessionId, {
+        userEntityRef: '', // Set on approve
         providerId,
         pluginId,
         codeVerifier,
+        codeChallenge,
         redirectUrl,
-        clientId,
-        tokenUrl,
+        clientId: '', // Set on approve
+        tokenUrl: '', // Set on approve
         expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
       });
 
-      const params = new URLSearchParams({
-        response_type: 'code',
-        client_id: clientId,
-        redirect_uri: callbackUrl,
-        scope: scopes.join(' '),
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
-      });
-
-      // For Auth0, add audience if configured
-      const audience = providerConfig.getOptionalString('audience');
-      if (audience) {
-        params.set('audience', audience);
-      }
-
-      res.redirect(`${authorizeUrl}?${params.toString()}`);
+      // Redirect to the existing frontend ConsentPage
+      const consentUrl = new URL(
+        `./oauth2/authorize/${sessionId}`,
+        appUrl.endsWith('/') ? appUrl : `${appUrl}/`,
+      );
+      res.redirect(consentUrl.toString());
     });
 
     // OAuth callback for external providers
@@ -507,7 +527,7 @@ export async function createRouter(
           throw new InputError('Missing code or state parameter');
         }
 
-        // Look up state
+        // Look up state (state is the sessionId, e.g. pt-abc123)
         const connectState = connectStates.get(state);
         if (!connectState || connectState.expiresAt < Date.now()) {
           connectStates.delete(state);
@@ -594,6 +614,9 @@ export async function createRouter(
     );
 
     router.use(providerTokenRouter);
+  } else {
+    // No provider token service – mount OidcRouter without session interceptors
+    router.use(oidcRouter.getRouter());
   }
 
   // Gives a more helpful error message than a plain 404
